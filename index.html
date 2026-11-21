@@ -171,7 +171,7 @@ const DEFAULT = {
     { id: 'a3', name: 'VCU / Classes', color: '#f2994a' },
     { id: 'a4', name: 'Personal', color: '#b06ce0' }
   ],
-  tasks: [], routines: [], goals: [], routineDone: {}, focusLog: [], timer: null,
+  tasks: [], routines: [], goals: [], routineDone: {}, routineSubDone: {}, focusLog: [], timer: null,
   xp: { total: 0, byArea: {}, days: {} },
   settings: { dayStart: 6, dayEnd: 23, pomo: 25, brk: 5, lead: 10, lastArea: null, morning: '07:30', evening: '20:30', nudged: {}, lang: 'en' }
 };
@@ -188,6 +188,8 @@ function load() {
       m.routines.forEach(r => { if (!r.rep) r.rep = { type: 'weekly', every: 1, days: r.days || [1, 2, 3, 4, 5] }; });
       const cut = addDays(today(), -70);
       for (const k in m.routineDone) if (k.split('|')[1] < cut) delete m.routineDone[k];
+      for (const k in m.routineSubDone) if (k.split('|')[1] < cut) delete m.routineSubDone[k];
+      m.routines.forEach(r => { if (!Array.isArray(r.subs)) r.subs = []; });
       m.focusLog = m.focusLog.filter(l => l.date >= cut);
       return m;
     }
@@ -228,7 +230,11 @@ function occurs(r, d) {
       if (rp.nth === -1) return dt.getDate() + 7 > last;
       return Math.ceil(dt.getDate() / 7) === rp.nth;
     }
-    case 'count': return !!S.routineDone[r.id + '|' + d] || doneCountIn(r, d) < (rp.times || 1);
+    case 'count': {
+      if (S.routineDone[r.id + '|' + d]) return true;
+      if (!inWindow(r, d)) return false;
+      return doneCountIn(r, d) < (rp.times || 1);
+    }
   }
   return false;
 }
@@ -240,13 +246,25 @@ function daysLabel(ds) {
   if (s === '06') return 'Weekends';
   return [1, 2, 3, 4, 5, 6, 0].filter(d => ds.includes(d)).map(d => DN[d]).join(' ');
 }
+function inWindow(r, d) {
+  const rp = r.rep, dt = parseYmd(d);
+  if (rp.per === 'week') return !(rp.days && rp.days.length) || rp.days.includes(dt.getDay());
+  if (rp.from) return dt.getDate() >= rp.from && dt.getDate() <= (rp.to || 31);
+  return true;
+}
+function lastChance(r, d) {
+  if (r.rep.type !== 'count' || S.routineDone[r.id + '|' + d]) return false;
+  const p = periodKey(r, d);
+  for (let x = addDays(d, 1), i = 0; i < 31 && periodKey(r, x) === p; x = addDays(x, 1), i++) if (inWindow(r, x)) return false;
+  return true;
+}
 function repLabel(r) {
   const p = r.rep;
   switch (p.type) {
     case 'weekly': return (p.every > 1 ? `Every ${p.every} weeks · ` : '') + daysLabel(p.days || []);
     case 'monthDate': return 'Monthly · the ' + (p.mdays || []).map(ORD).join(', ');
     case 'monthWeekday': return `Monthly · ${ORD(p.nth)} ${DN[p.wd]}`;
-    case 'count': return `${p.times}× a ${p.per}`;
+    case 'count': return `${p.times}× a ${p.per}` + (p.per === 'week' && p.days && p.days.length ? ' · ' + daysLabel(p.days) : p.per === 'month' && p.from ? ` · ${ORD(p.from)}–${ORD(p.to || 31)}` : '');
   }
   return '';
 }
@@ -334,10 +352,28 @@ function toggleSub(t, s) {
   }
   save(); render(); if (msg) toast(msg);
 }
-function toggleRoutine(r, d) {
+function toggleRoutine(r, d, quiet) {
   const k = r.id + '|' + d;
-  if (S.routineDone[k]) { delete S.routineDone[k]; addXP(-10, r.areaId); }
-  else { S.routineDone[k] = true; addXP(10, r.areaId); toast('Routine done ✓ +10 XP'); }
+  if (S.routineDone[k]) {
+    delete S.routineDone[k]; addXP(-10, r.areaId);
+    (r.subs || []).forEach(s => { const sk = k + '|' + s.id; if (S.routineSubDone[sk]) { addXP(-S.routineSubDone[sk], r.areaId); delete S.routineSubDone[sk]; } });
+  } else {
+    let n = 10;
+    (r.subs || []).forEach(s => { const sk = k + '|' + s.id; if (!S.routineSubDone[sk]) { S.routineSubDone[sk] = SXP[s.priority] || 10; n += S.routineSubDone[sk]; addXP(S.routineSubDone[sk], r.areaId); } });
+    S.routineDone[k] = true; addXP(10, r.areaId); if (!quiet) toast(`Routine done ✓ +${n} XP`);
+  }
+  if (!quiet) { save(); render(); }
+}
+function toggleRoutineSub(r, s, d) {
+  const k = r.id + '|' + d, sk = k + '|' + s.id;
+  if (S.routineSubDone[sk]) {
+    if (S.routineDone[k]) { delete S.routineDone[k]; addXP(-10, r.areaId); }
+    addXP(-S.routineSubDone[sk], r.areaId); delete S.routineSubDone[sk];
+  } else {
+    S.routineSubDone[sk] = SXP[s.priority] || 10; addXP(S.routineSubDone[sk], r.areaId);
+    if (r.subs.every(x => S.routineSubDone[k + '|' + x.id]) && !S.routineDone[k]) { S.routineDone[k] = true; addXP(10, r.areaId); toast(`All done: ${r.title} ✓`); }
+    else toast(`✓ +${S.routineSubDone[sk]} XP`);
+  }
   save(); render();
 }
 /* ---------- view state ---------- */
@@ -375,11 +411,16 @@ function taskRow(t, opt = {}) {
   ${showSubs ? `<div class="subs">${t.subs.map(s => `<div class="srow ${s.done ? 'done' : ''}"><button class="chk ${s.done ? 'on' : ''}" data-act="stog" data-id="${t.id}|${s.id}" style="--c:${ar.color}" aria-label="Toggle subtask">${s.done ? '✓' : ''}</button><span class="t">${esc(s.title)}</span>${prTag(s.priority)}</div>`).join('')}</div>` : ''}`;
 }
 function routineRow(r, date) {
-  const ar = area(r.areaId), on = date && occurs(r, date);
-  const done = on && S.routineDone[r.id + '|' + date];
+  const ar = area(r.areaId), on = date && occurs(r, date), k = r.id + '|' + date;
+  const done = on && S.routineDone[k];
   const cnt = r.rep.type === 'count' && date ? ` · ${doneCountIn(r, date)}/${r.rep.times} this ${r.rep.per}` : '';
+  const last = on && lastChance(r, date) ? ' · <span class="od">Last day</span>' : '';
+  const subs = r.subs || [], nS = subs.length, dS = on ? subs.filter(s => S.routineSubDone[k + '|' + s.id]).length : 0;
+  const open = nS && on && openSubs.has('r:' + r.id);
   return `<div class="row ${done ? 'done' : ''}">${on ? `<button class="chk" data-act="rtog" data-id="${r.id}" style="--c:${ar.color}" aria-label="Toggle done">${done ? '✓' : ''}</button>` : `<span class="chk" style="--c:${ar.color};opacity:.35"></span>`}
-  <div class="rb" data-act="redit" data-id="${r.id}"><div class="rt">↻ ${esc(r.title)}</div><div class="rm"><i style="background:${ar.color}"></i>${esc(ar.name)} · ${repLabel(r)}${r.time ? ' · ' + fmtTime(r.time) : ''}${cnt}${r.remind ? ' · 🔔' : ''}</div></div></div>`;
+  <div class="rb" data-act="redit" data-id="${r.id}"><div class="rt">↻ ${esc(r.title)}</div><div class="rm"><i style="background:${ar.color}"></i>${esc(ar.name)} · ${repLabel(r)}${r.time ? ' · ' + fmtTime(r.time) : ''}${cnt}${last}${nS ? ` · ☑ ${dS}/${nS}` : ''}${r.remind ? ' · 🔔' : ''}</div></div>
+  ${nS && on ? `<button class="xb" data-act="sx" data-id="r:${r.id}" aria-label="Show subtasks">${open ? '▴' : '▾'}</button>` : ''}</div>
+  ${open ? `<div class="subs">${subs.map(s => { const sd = S.routineSubDone[k + '|' + s.id]; return `<div class="srow ${sd ? 'done' : ''}"><button class="chk ${sd ? 'on' : ''}" data-act="rstog" data-id="${r.id}|${s.id}" style="--c:${ar.color}" aria-label="Toggle subtask">${sd ? '✓' : ''}</button><span class="t">${esc(s.title)}</span>${prTag(s.priority)}</div>`; }).join('')}</div>` : ''}`;
 }
 
 /* ---------- render ---------- */
@@ -745,7 +786,7 @@ function openEditor(preset = {}) {
   E = Object.assign({
     id: null, origKind: null, title: '', areaId: S.settings.lastArea && S.areas.some(a => a.id === S.settings.lastArea) ? S.settings.lastArea : S.areas[0]?.id,
     priority: 2, start: baseDay(), due: null, time: '', remind: false, est: 30, notes: '', subs: [],
-    rep: { type: view === 'routines' ? 'weekly' : 'none', every: 1, days: [parseYmd(today()).getDay()], mdaysText: String(parseYmd(today()).getDate()), nth: 1, wd: parseYmd(today()).getDay(), times: 3, per: 'week' },
+    rep: { type: view === 'routines' ? 'weekly' : 'none', every: 1, days: [parseYmd(today()).getDay()], cdays: [], from: '', to: '', mdaysText: String(parseYmd(today()).getDate()), nth: 1, wd: parseYmd(today()).getDay(), times: 1, per: 'week' },
     goalId: null, msId: null
   }, preset);
   edRender(true);
@@ -755,14 +796,16 @@ function editTask(id) {
   openEditor({
     id, origKind: 'task', title: t.title, areaId: t.areaId, priority: t.priority, start: t.start || t.schedDate || null, due: t.due, time: t.schedTime || '',
     remind: !!t.remind, est: t.est || 30, notes: t.notes || '', subs: t.subs.map(s => ({ ...s })), goalId: t.goalId || null, msId: t.msId || null,
-    rep: { type: 'none', every: 1, days: [parseYmd(today()).getDay()], mdaysText: '1', nth: 1, wd: 1, times: 3, per: 'week' }
+    rep: { type: 'none', every: 1, days: [parseYmd(today()).getDay()], cdays: [], from: '', to: '', mdaysText: '1', nth: 1, wd: 1, times: 1, per: 'week' }
   });
 }
 function editRoutine(id) {
   const r = S.routines.find(x => x.id === id); if (!r) return;
   openEditor({
     id, origKind: 'routine', title: r.title, areaId: r.areaId, priority: 2, start: r.start || today(), due: null, time: r.time || '', remind: !!r.remind, est: r.est || 30, notes: r.notes || '',
-    rep: Object.assign({ every: 1, days: [1], mdaysText: (r.rep.mdays || [1]).join(', '), nth: 1, wd: 1, times: 3, per: 'week' }, structuredClone(r.rep), { mdaysText: (r.rep.mdays || [1]).join(', ') }), goalId: r.goalId || null
+    subs: (r.subs || []).map(s => ({ ...s })),
+    rep: Object.assign({ every: 1, days: [1], mdaysText: (r.rep.mdays || [1]).join(', '), nth: 1, wd: 1, times: 3, per: 'week', from: '', to: '' }, structuredClone(r.rep),
+      { mdaysText: (r.rep.mdays || [1]).join(', '), cdays: r.rep.type === 'count' ? [...(r.rep.days || [])] : [], days: r.rep.type === 'weekly' ? [...r.rep.days] : [parseYmd(today()).getDay()] }), goalId: r.goalId || null
   });
 }
 function edRender(focusTitle) {
@@ -792,18 +835,21 @@ function edRender(focusTitle) {
     <option value="weekly" ${rp.type === 'weekly' ? 'selected' : ''}>Weekly / every few weeks</option>
     <option value="monthDate" ${rp.type === 'monthDate' ? 'selected' : ''}>Monthly on a date (e.g. the 1st)</option>
     <option value="monthWeekday" ${rp.type === 'monthWeekday' ? 'selected' : ''}>Monthly on a weekday (e.g. 2nd Tue)</option>
-    <option value="count" ${rp.type === 'count' ? 'selected' : ''}>X times a week / month, any day</option></select>
+    <option value="count" ${rp.type === 'count' ? 'selected' : ''}>X times a week / month (with a window)</option></select>
    ${rp.type === 'weekly' ? `<div class="erow"><span>On</span>${[1, 2, 3, 4, 5, 6, 0].map(d => `<button type="button" class="chip ${rp.days.includes(d) ? 'on' : ''}" data-act="eday" data-id="${d}">${DN[d].slice(0, 2)}</button>`).join('')}</div>
      <div class="erow"><span>Every</span><select data-f="rep.every">${[1, 2, 3, 4].map(n => `<option value="${n}" ${rp.every == n ? 'selected' : ''}>${n === 1 ? 'week' : n + ' weeks'}</option>`).join('')}</select></div>` : ''}
    ${rp.type === 'monthDate' ? `<div class="erow"><span>Day(s)</span><input data-f="rep.mdaysText" inputmode="numeric" value="${esc(rp.mdaysText)}" placeholder="1, 15" style="width:120px"><span class="muted" style="width:auto">of each month</span></div>` : ''}
    ${rp.type === 'monthWeekday' ? `<div class="erow"><span>The</span><select data-f="rep.nth">${[[1, '1st'], [2, '2nd'], [3, '3rd'], [4, '4th'], [-1, 'last']].map(([v, l]) => `<option value="${v}" ${rp.nth == v ? 'selected' : ''}>${l}</option>`).join('')}</select>
      <select data-f="rep.wd">${[1, 2, 3, 4, 5, 6, 0].map(d => `<option value="${d}" ${rp.wd == d ? 'selected' : ''}>${DN[d]}</option>`).join('')}</select><span class="muted" style="width:auto">of each month</span></div>` : ''}
-   ${rp.type === 'count' ? `<div class="erow"><span>Do it</span><input type="number" min="1" max="31" data-f="rep.times" value="${rp.times}" style="width:70px"><span class="muted" style="width:auto">times a</span>
+   ${rp.type === 'count' ? `<div class="erow"><span>Do it</span><input type="number" min="1" max="31" data-f="rep.times" value="${rp.times}" style="width:70px"><span class="muted" style="width:auto">time${rp.times > 1 ? 's' : ''} a</span>
      <select data-f="rep.per"><option value="week" ${rp.per === 'week' ? 'selected' : ''}>week</option><option value="month" ${rp.per === 'month' ? 'selected' : ''}>month</option></select></div>
-     <div class="hint">Shows on your list every day until you've done it enough times.</div>` : ''}
+     ${rp.per === 'week' ? `<div class="erow"><span>Between</span>${[1, 2, 3, 4, 5, 6, 0].map(d => `<button type="button" class="chip ${(rp.cdays || []).includes(d) ? 'on' : ''}" data-act="ecday" data-id="${d}">${DN[d].slice(0, 2)}</button>`).join('')}</div>
+       <div class="hint">${(rp.cdays || []).length ? `Shows on ${daysLabel(rp.cdays)} until done ${rp.times}×, then disappears for the rest of the week.` : 'No days picked = any day of the week.'}</div>`
+     : `<div class="erow"><span>Between</span><span class="muted" style="width:auto">the</span><input type="number" min="1" max="31" data-f="rep.from" value="${rp.from || ''}" placeholder="1" style="width:64px"><span class="muted" style="width:auto">and the</span><input type="number" min="1" max="31" data-f="rep.to" value="${rp.to || ''}" placeholder="31" style="width:64px"></div>
+       <div class="hint">Leave empty = any day of the month.</div>`}` : ''}
   </div>
 
-  ${isTask ? `<div class="sec"><span class="lbl">Subtasks</span>
+  ${true ? `<div class="sec"><span class="lbl">Subtasks${isTask ? '' : ' <small>(fresh each time it repeats)</small>'}</span>
    ${e.subs.map((s, i) => `<div class="sedit"><input data-f="sub.${i}.title" value="${esc(s.title)}" placeholder="Subtask ${i + 1}" enterkeyhint="next">
      <select data-f="sub.${i}.priority" aria-label="Priority">${[[1, 'High'], [2, 'Normal'], [3, 'Low']].map(([v, l]) => `<option value="${v}" ${s.priority == v ? 'selected' : ''}>${l}</option>`).join('')}</select>
      <button type="button" class="xb" data-act="esubdel" data-id="${i}" aria-label="Remove subtask">✕</button></div>`).join('')}
@@ -827,7 +873,7 @@ function edRender(focusTitle) {
 }
 function edSet(path, v) {
   const p = path.split('.');
-  if (p[0] === 'rep') E.rep[p[1]] = ['every', 'nth', 'wd', 'times'].includes(p[1]) ? +v : v;
+  if (p[0] === 'rep') E.rep[p[1]] = ['every', 'nth', 'wd', 'times'].includes(p[1]) ? +v : ['from', 'to'].includes(p[1]) ? (v === '' ? '' : +v) : v;
   else if (p[0] === 'sub') E.subs[+p[1]][p[2]] = p[2] === 'priority' ? +v : v;
   else E[p[0]] = p[0] === 'priority' || p[0] === 'est' ? +v : v;
 }
@@ -836,7 +882,7 @@ function edChange(ev) {
   const el = ev.target, f = el.dataset.f; if (!f) return;
   edSet(f, el.type === 'checkbox' ? el.checked : el.value);
   if (f === 'time' && el.value && !E.remind) E.remind = true;
-  if (['rep.type', 'time', 'start', 'due'].includes(f)) edRerender();
+  if (['rep.type', 'rep.per', 'rep.times', 'time', 'start', 'due'].includes(f)) edRerender();
 }
 function edRerender() { const sc = $('.panel') ? $('.panel').scrollTop : 0; edRender(false); $('.panel').scrollTop = sc; }
 function edSave() {
@@ -860,10 +906,15 @@ function edSave() {
     if (rp.type === 'weekly') { if (!e.rep.days.length) return toast('Pick at least one day'); rp.days = [...e.rep.days]; rp.every = e.rep.every || 1; }
     if (rp.type === 'monthDate') { rp.mdays = [...new Set(String(e.rep.mdaysText).split(/[^0-9]+/).map(Number).filter(n => n >= 1 && n <= 31))]; if (!rp.mdays.length) return toast('Enter a day of the month, like 1 or 15'); }
     if (rp.type === 'monthWeekday') { rp.nth = e.rep.nth; rp.wd = e.rep.wd; }
-    if (rp.type === 'count') { rp.times = Math.max(1, Math.min(31, e.rep.times || 1)); rp.per = e.rep.per; }
+    if (rp.type === 'count') {
+      rp.times = Math.max(1, Math.min(31, e.rep.times || 1)); rp.per = e.rep.per;
+      if (rp.per === 'week') rp.days = [...(e.rep.cdays || [])];
+      else { const f = +e.rep.from, t = +e.rep.to; if (f >= 1 && f <= 31) { rp.from = f; rp.to = t >= f && t <= 31 ? t : 31; } }
+    }
     let r = e.origKind === 'routine' ? S.routines.find(x => x.id === e.id) : null;
     if (e.origKind === 'task') S.tasks = S.tasks.filter(x => x.id !== e.id);
-    const o = { title, areaId: e.areaId, rep: rp, days: rp.days || [], time: e.time || null, est: e.est, remind: !!(e.time && e.remind), notes: e.notes, start: e.start || today(), active: true };
+    const rsubs = e.subs.filter(s => String(s.title || '').trim()).map(s => ({ id: s.id || uid(), title: s.title.trim(), priority: +s.priority || 2 }));
+    const o = { title, areaId: e.areaId, rep: rp, subs: rsubs, days: rp.type === 'weekly' ? rp.days : [], time: e.time || null, est: e.est, remind: !!(e.time && e.remind), notes: e.notes, start: e.start || today(), active: true };
     if (r) Object.assign(r, o); else S.routines.push(Object.assign({ id: uid(), createdAt: Date.now(), goalId: e.goalId }, o));
     if (o.remind) askNotify();
   }
@@ -922,7 +973,7 @@ const JSON_SPEC = `\`\`\`json
  "newTasks": [{"title":"","area":"<one of my roles>","priority":2,"start":"YYYY-MM-DD or null","due":"YYYY-MM-DD or null","time":"HH:MM or null","subtasks":[{"title":"","priority":2}]}],
  "goal": {"title":"","type":"skill|career|project|decision|trip","area":"<one of my roles>","why":"one line",
    "milestones":[{"title":"","tasks":[{"title":"","start":"YYYY-MM-DD","due":"YYYY-MM-DD or null","time":null,"priority":2,"subtasks":[{"title":"","priority":2}]}]}]},
- "routines": [{"title":"","area":"<one of my roles>","repeat":"weekly|monthlyDate|monthlyWeekday|timesPer","days":["Mon","Wed"],"every":1,"monthDays":[1],"nth":2,"weekday":"Tue","times":3,"per":"week","time":"HH:MM or null","minutes":20}]
+ "routines": [{"title":"","area":"<one of my roles>","repeat":"weekly|monthlyDate|monthlyWeekday|timesPer","days":["Mon","Wed"],"every":1,"monthDays":[1],"nth":2,"weekday":"Tue","times":1,"per":"week","fromDay":1,"toDay":5,"time":"HH:MM or null","minutes":20,"subtasks":[{"title":"","priority":2}]}]
 }
 \`\`\``;
 function ctxBlock() {
@@ -1041,9 +1092,13 @@ function claudeImport() {
     const kind = String(r.repeat || 'weekly').toLowerCase(), rep = {};
     if (kind.startsWith('monthlydate')) { rep.type = 'monthDate'; rep.mdays = (r.monthDays || [1]).map(Number).filter(n => n >= 1 && n <= 31); if (!rep.mdays.length) rep.mdays = [1]; }
     else if (kind.startsWith('monthlyweekday')) { rep.type = 'monthWeekday'; rep.nth = [1, 2, 3, 4, -1].includes(+r.nth) ? +r.nth : 1; rep.wd = dayNum(r.weekday) ?? 1; }
-    else if (kind.startsWith('times')) { rep.type = 'count'; rep.times = Math.max(1, Math.min(31, +r.times || 3)); rep.per = r.per === 'month' ? 'month' : 'week'; }
+    else if (kind.startsWith('times')) {
+      rep.type = 'count'; rep.times = Math.max(1, Math.min(31, +r.times || 3)); rep.per = r.per === 'month' ? 'month' : 'week';
+      if (rep.per === 'week') rep.days = [...new Set((r.days || []).map(dayNum).filter(d => d !== undefined))];
+      else if (+r.fromDay >= 1) { rep.from = Math.min(31, +r.fromDay); rep.to = Math.max(rep.from, Math.min(31, +r.toDay || 31)); }
+    }
     else { rep.type = 'weekly'; rep.days = [...new Set((r.days || []).map(dayNum).filter(d => d !== undefined))]; rep.every = Math.max(1, Math.min(4, +r.every || 1)); if (!rep.days.length) rep.days = [1, 2, 3, 4, 5]; }
-    S.routines.push({ id: uid(), title: String(r.title).trim().slice(0, 120), areaId: findArea(r.area || (data.goal && data.goal.area)), rep, days: rep.days || [], time: nt(r.time), est: Math.min(480, Math.max(5, +r.minutes || 30)), remind: !!nt(r.time), start: today(), active: true, goalId: gid, createdAt: Date.now() });
+    S.routines.push({ id: uid(), subs: (Array.isArray(r.subtasks) ? r.subtasks : []).filter(s => s && String(s.title || '').trim()).map(s => ({ id: uid(), title: String(s.title).trim().slice(0, 160), priority: pr(s.priority) })), title: String(r.title).trim().slice(0, 120), areaId: findArea(r.area || (data.goal && data.goal.area)), rep, days: rep.days || [], time: nt(r.time), est: Math.min(480, Math.max(5, +r.minutes || 30)), remind: !!nt(r.time), start: today(), active: true, goalId: gid, createdAt: Date.now() });
     rAdded++;
   });
   if (!moved && !added && !rAdded && !gid) { claudeUndo = null; return toast('Nothing to import in that reply'); }
@@ -1067,6 +1122,8 @@ const actions = {
   del: async id => { if (!await ask('Delete this task?')) return; S.tasks = S.tasks.filter(t => t.id !== id); save(); closeSheet(); render(); },
   rdel: async id => { if (!await ask('Delete this routine?')) return; S.routines = S.routines.filter(r => r.id !== id); save(); closeSheet(); render(); },
   eset: v => { const i = v.indexOf('|'); edSet(v.slice(0, i), v.slice(i + 1)); edRerender(); },
+  ecday: v => { const d = +v, ds = E.rep.cdays || []; E.rep.cdays = ds.includes(d) ? ds.filter(x => x !== d) : [...ds, d]; edRerender(); },
+  rstog: v => { const [rid, sid] = v.split('|'), r = S.routines.find(x => x.id === rid), s = r && (r.subs || []).find(x => x.id === sid); if (s) toggleRoutineSub(r, s, view === 'today' ? day : today()); },
   eday: v => { const d = +v, ds = E.rep.days; E.rep.days = ds.includes(d) ? ds.filter(x => x !== d) : [...ds, d]; edRerender(); },
   esubadd: () => { E.subs.push({ title: '', priority: 2 }); edRerender(); const ins = document.querySelectorAll('.sedit input'); ins[ins.length - 1]?.focus(); },
   esubdel: i => { E.subs.splice(+i, 1); edRerender(); },
