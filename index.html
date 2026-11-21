@@ -301,7 +301,7 @@ function dayLists(d) {
 const XPP = { 1: 30, 2: 20, 3: 10 }, SXP = { 1: 15, 2: 10, 3: 5 };
 const LVL = l => 100 + 50 * (l - 1);
 const STAGES = [[1, 'Seed'], [2, 'Sprout'], [4, 'Seedling'], [6, 'Sapling'], [9, 'Young tree'], [13, 'Tree'], [18, 'Great tree'], [25, 'Ancient tree']];
-function levelOf(xp) { let l = 1, need = LVL(1); while (xp >= need) { xp -= need; l++; need = LVL(l); } return { l, into: xp, need }; }
+function levelOf(xp) { if (!(xp > 0)) return { l: 0, into: 0, need: 1 }; let l = 1, need = LVL(1); while (xp >= need) { xp -= need; l++; need = LVL(l); } return { l, into: xp, need }; }
 const stageOf = l => STAGES.filter(s => l >= s[0]).pop()[1];
 function streak() {
   let d = today(), n = 0;
@@ -549,7 +549,7 @@ function addXP(n, areaId, meta = {}) {
 
 /* ---------- role levels, ranks, titles (never-ending) ---------- */
 const RL = l => 60 + 25 * (l - 1);
-function roleLevelOf(xp) { let l = 1, need = RL(1); while (xp >= need) { xp -= need; l++; need = RL(l); } return { l, into: xp, need }; }
+function roleLevelOf(xp) { if (!(xp > 0)) return { l: 0, into: 0, need: 1 }; let l = 1, need = RL(1); while (xp >= need) { xp -= need; l++; need = RL(l); } return { l, into: xp, need }; }
 const LADDER_LV = [1, 5, 10, 15, 20, 30, 40, 50];
 const LADDERS = {
   work: ['Coffee Fetcher', 'Intern', 'Grinder', 'Hustler', 'Closer', 'Big Boss', 'CEO Mode', 'Empire Builder'],
@@ -574,6 +574,7 @@ function ladderOf(a) {
   return [...m.entries()].map(([level, title]) => ({ level, title })).sort((x, y) => x.level - y.level);
 }
 function titleFrom(ladder, L) {
+  if (L < 1) return 'Not started yet';
   let cur = ladder[0];
   for (const x of ladder) if (x.level <= L) cur = x;
   const top = ladder[ladder.length - 1];
@@ -581,14 +582,14 @@ function titleFrom(ladder, L) {
   return cur.title;
 }
 const roleTitle = (a, L) => titleFrom(ladderOf(a), L);
-const overallTitle = L => titleFrom(OVERALL.map((t, i) => ({ level: LADDER_LV[i], title: t })), L);
+const overallTitle = L => L < 1 ? 'Newcomer' : titleFrom(OVERALL.map((t, i) => ({ level: LADDER_LV[i], title: t })), L);
 const nextTitle = (a, L) => ladderOf(a).find(x => x.level > L);
 const RANKS = [
   { name: 'Wood', c1: '#a0764e', c2: '#6f4b2d' }, { name: 'Bronze', c1: '#d9925b', c2: '#8f5326' }, { name: 'Silver', c1: '#d9dde3', c2: '#8b95a3' },
   { name: 'Gold', c1: '#ffd65c', c2: '#c9930c' }, { name: 'Platinum', c1: '#8ee8e0', c2: '#2b9c93' }, { name: 'Diamond', c1: '#9fc8ff', c2: '#3f6fd8' },
   { name: 'Elite', c1: '#ff8a7a', c2: '#c4302b' }, { name: 'Legend', c1: '#d6a8ff', c2: '#7a3fd0' }
 ];
-function rankOf(L) { const i = Math.min(RANKS.length - 1, Math.floor(L / 5)); const stars = L >= 40 ? Math.floor((L - 35) / 5) : 0; return Object.assign({ i, stars }, RANKS[i]); }
+function rankOf(L) { if (L < 1) return { i: 0, stars: 0, name: 'Unranked', c1: '#c3c8d0', c2: '#8a919c' }; const i = Math.min(RANKS.length - 1, Math.floor(L / 5)); const stars = L >= 40 ? Math.floor((L - 35) / 5) : 0; return Object.assign({ i, stars }, RANKS[i]); }
 function badgeSVG(L, size = 44, gold) {
   const r = rankOf(L), id = 'bg' + uid(), R = size / 2;
   const hex = k => [0, 1, 2, 3, 4, 5].map(j => { const a = Math.PI / 3 * j - Math.PI / 2; return `${(R + k * Math.cos(a)).toFixed(1)},${(R + k * Math.sin(a)).toFixed(1)}`; }).join(' ');
@@ -602,12 +603,12 @@ function badgeSVG(L, size = 44, gold) {
 
 /* ---------- ratings for the card & radar ---------- */
 const activeAreas = () => S.areas.filter(a => !a.closed);
-const roleRating = L => Math.min(99, Math.round(40 + 59 * (1 - Math.exp(-(L - 1) / 18))));
-function consistencyRating() { let n = 0; for (let i = 0; i < 28; i++) if (S.xp.days[addDays(today(), -i)] > 0) n++; return Math.round(25 + 74 * n / 28); }
+const roleRating = L => L < 1 ? 0 : Math.min(99, Math.round(99 * (1 - Math.exp(-L / 20))));
+function consistencyRating() { let n = 0; for (let i = 0; i < 28; i++) if (S.xp.days[addDays(today(), -i)] > 0) n++; return Math.round(99 * n / 28); }
 function goalsRating() {
   const cut = addDays(today(), -30), steps = S.xpLog.filter(e => e.g && e.d >= cut).length;
-  if (!S.goals.length) return 25;
-  return Math.min(99, Math.round(35 + goalsDone() * 10 + steps * 3));
+  if (!S.goals.length && !steps) return 0;
+  return Math.min(99, Math.round(goalsDone() * 12 + steps * 3));
 }
 function form() {
   let a = 0, b = 0; for (const e of S.xpLog) { const n = (parseYmd(today()) - parseYmd(e.d)) / 864e5; if (n < 7) a += e.x; else if (n < 14) b += e.x; }
@@ -630,7 +631,7 @@ function roleHistory(a) {
   const es = S.xpLog.filter(e => e.a === a.id);
   let xp = 0; const nodes = {};
   for (const e of es) {
-    const L = roleLevelOf(xp).l; xp += e.x;
+    const L = Math.max(1, roleLevelOf(xp).l); xp += e.x;
     (nodes[L] = nodes[L] || []).push(e);
   }
   return nodes;
@@ -676,14 +677,14 @@ function cardHTML() {
       <b>${esc(roleTitle(a, R.l))}</b></div></div>
       ${a.closed ? `<div style="font-size:12px;margin-top:6px">🎓 Closed ${parseYmd(a.closed).toLocaleDateString(undefined, { month: 'short', year: 'numeric' })}</div>`
         : `<div class="bal" style="height:6px;margin-top:8px"><i style="flex:${R.into || 0.0001};background:${a.color}"></i><i style="flex:${R.need - R.into};background:transparent"></i></div>
-      <div class="muted" style="font-size:11.5px">${nt ? `Next: ${esc(nt.title)} at Lv ${nt.level}` : `${R.into}/${R.need} XP`}</div>`}</div>`;
+      <div class="muted" style="font-size:11.5px">${!R.l ? 'Do 1 task to start' : nt ? `Next: ${esc(nt.title)} at Lv ${nt.level}` : `${R.into}/${R.need} XP`}</div>`}</div>`;
   };
   return `<div class="card pcard"><div style="display:flex;gap:14px;align-items:center">
     <div class="ovr"><div style="font-size:34px;font-weight:800;line-height:1">${ovr}</div><div style="font-size:11px;letter-spacing:.08em">OVR</div><div style="font-size:12px;margin-top:4px">Lv ${L.l}</div></div>
     <div style="min-width:0;flex:1"><div style="font-size:18px;font-weight:700">${overallTitle(L.l)}</div>
     <div class="muted">Form <b style="color:${f[2]}">${f[0]} ${f[1]}</b>${st ? ` · 🔥 ${st}-day streak` : ''}</div>
     <div class="bal" style="height:7px;margin-top:8px"><i style="flex:${L.into || 0.0001};background:var(--ac)"></i><i style="flex:${L.need - L.into};background:transparent"></i></div>
-    <div class="muted" style="font-size:12px">${L.into} / ${L.need} XP to Lv ${L.l + 1}</div></div></div>
+    <div class="muted" style="font-size:12px">${L.l ? `${L.into} / ${L.need} XP to Lv ${L.l + 1}` : 'Finish your first task to reach Lv 1'}</div></div></div>
     ${radarSVG(items)}</div>
   <h3>Your roles</h3><div class="rgrid">${act.map(roleCard).join('')}</div>
   ${closed.length ? `<h3>🏛 Hall of Fame</h3><div class="rgrid">${closed.map(roleCard).join('')}</div>` : ''}
