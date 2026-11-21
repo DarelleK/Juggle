@@ -1,5 +1,5 @@
 // Juggle service worker: makes the app work offline. Your data never passes through here.
-const CACHE = 'juggle-v1';
+const CACHE = 'juggle-v2';
 const ASSETS = ['./', './index.html', './manifest.webmanifest', './icons/icon-192.png', './icons/icon-512.png'];
 
 self.addEventListener('install', e => {
