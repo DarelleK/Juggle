@@ -113,6 +113,15 @@ textarea{min-height:60px;resize:vertical}
 .ctr{text-align:center}
 .ctr .btns{justify-content:center}
 .mode{font-size:13px;text-transform:uppercase;letter-spacing:.08em;color:var(--mu)}
+.pcard{padding:14px}.ovr{width:86px;height:104px;border-radius:14px;flex:none;display:flex;flex-direction:column;align-items:center;justify-content:center;background:linear-gradient(160deg,#ffe7a3,#e5b23c);color:#4a3405}
+.rgrid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}.rc{padding:10px;cursor:pointer}.rcn{font-size:12px;color:var(--mu);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.rc b{font-size:14px;display:block;line-height:1.2}
+.treewrap{overflow:auto;border-radius:16px;max-height:70vh;-webkit-overflow-scrolling:touch}
+.tlab,.tlab2{fill:#fff;paint-order:stroke;stroke:rgba(0,0,0,.45);stroke-width:2.5px;stroke-linejoin:round}
+svg[data-th=light] .tlab,svg[data-th=light] .tlab2{fill:#1b2333;stroke:rgba(255,255,255,.85)}
+.pulse{animation:pulse 1.8s ease-out infinite;transform-box:fill-box;transform-origin:center}
+@keyframes pulse{from{opacity:.9;transform:scale(1)}to{opacity:0;transform:scale(2.1)}}
+@media (prefers-reduced-motion:reduce){.pulse{animation:none}}
+.hrow{display:flex;gap:8px;font-size:13.5px;padding:4px 0;border-top:1px solid var(--ln)}
 #toast{position:fixed;left:50%;bottom:calc(156px + env(safe-area-inset-bottom));transform:translateX(-50%);background:#000c;color:#fff;padding:10px 16px;border-radius:12px;font-size:14px;z-index:20;opacity:0;transition:opacity .2s;pointer-events:none;max-width:90vw;text-align:center}
 #toast.show{opacity:1}
 #dlg{position:fixed;inset:0;background:#0009;z-index:30;display:none;align-items:center;justify-content:center;padding:20px}
@@ -171,7 +180,7 @@ const DEFAULT = {
     { id: 'a3', name: 'VCU / Classes', color: '#f2994a' },
     { id: 'a4', name: 'Personal', color: '#b06ce0' }
   ],
-  tasks: [], routines: [], goals: [], routineDone: {}, routineSubDone: {}, focusLog: [], timer: null,
+  tasks: [], routines: [], goals: [], routineDone: {}, routineSubDone: {}, focusLog: [], timer: null, xpLog: [],
   xp: { total: 0, byArea: {}, days: {} },
   settings: { dayStart: 6, dayEnd: 23, pomo: 25, brk: 5, lead: 10, lastArea: null, morning: '07:30', evening: '20:30', nudged: {}, lang: 'en' }
 };
@@ -183,6 +192,7 @@ function load() {
       const m = Object.assign(structuredClone(DEFAULT), s);
       m.settings = Object.assign({}, DEFAULT.settings, s.settings);
       m.xp = Object.assign({ total: 0, byArea: {}, days: {} }, s.xp);
+      if (!Array.isArray(m.xpLog)) m.xpLog = [];
       m.areas.forEach(a => { if (a.name === 'Vocational School') a.name = 'Work'; });
       m.tasks.forEach(t => { if (!Array.isArray(t.subs)) t.subs = []; });
       m.routines.forEach(r => { if (!r.rep) r.rep = { type: 'weekly', every: 1, days: r.days || [1, 2, 3, 4, 5] }; });
@@ -271,7 +281,7 @@ function repLabel(r) {
 
 /* ---------- day lists ---------- */
 function dayLists(d) {
-  const t0 = today(), open = S.tasks.filter(t => !t.done), used = new Set();
+  const t0 = today(), open = S.tasks.filter(t => !t.done && !t.archived), used = new Set();
   const take = arr => { arr.forEach(t => used.add(t.id)); return arr; };
   const tm = t => t.schedDate === d && t.schedTime || '99';
   const sorter = (a, b) => tm(a).localeCompare(tm(b)) || a.priority - b.priority || (a.due || '9').localeCompare(b.due || '9');
@@ -293,18 +303,6 @@ const LVL = l => 100 + 50 * (l - 1);
 const STAGES = [[1, 'Seed'], [2, 'Sprout'], [4, 'Seedling'], [6, 'Sapling'], [9, 'Young tree'], [13, 'Tree'], [18, 'Great tree'], [25, 'Ancient tree']];
 function levelOf(xp) { let l = 1, need = LVL(1); while (xp >= need) { xp -= need; l++; need = LVL(l); } return { l, into: xp, need }; }
 const stageOf = l => STAGES.filter(s => l >= s[0]).pop()[1];
-function addXP(n, areaId) {
-  if (!n) return;
-  const X = S.xp, before = levelOf(X.total).l;
-  X.total = Math.max(0, X.total + n);
-  if (areaId) X.byArea[areaId] = Math.max(0, (X.byArea[areaId] || 0) + n);
-  const d = today(); X.days[d] = Math.max(0, (X.days[d] || 0) + (n > 0 ? 1 : -1)); if (!X.days[d]) delete X.days[d];
-  const after = levelOf(X.total).l;
-  if (after > before) setTimeout(() => {
-    notify(`Level ${after}! 🌳`, `Your tree grew${stageOf(after) !== stageOf(before) ? ' into a ' + stageOf(after) : ''}. Keep going!`);
-    if (navigator.vibrate) navigator.vibrate([100, 60, 100, 60, 250]);
-  }, 400);
-}
 function streak() {
   let d = today(), n = 0;
   if (!S.xp.days[d]) d = addDays(d, -1);
@@ -324,18 +322,18 @@ function completeTask(t) {
   t.done = true; t.doneAt = Date.now();
   let n = XPP[t.priority] || 20, msg = `Done ✓ +${n} XP`;
   let subXP = 0;
-  t.subs.forEach(s => { if (!s.done) { s.done = true; s.xp = SXP[s.priority] || 10; subXP += s.xp; addXP(s.xp, t.areaId); } });
+  t.subs.forEach(s => { if (!s.done) { s.done = true; s.xp = SXP[s.priority] || 10; subXP += s.xp; addXP(s.xp, t.areaId, { t: s.title + ' (' + t.title + ')', k: 'sub', ref: t.id + '|' + s.id }); } });
   if (subXP) msg = `Done ✓ +${n + subXP} XP`;
   if (t.goalId) {
     if (t.msId && S.tasks.filter(x => x.msId === t.msId).every(x => x.done)) { n += 50; msg = `🏁 Milestone reached! +${n + subXP} XP`; }
     if (S.tasks.filter(x => x.goalId === t.goalId).every(x => x.done)) { n += 150; msg = `🍋 Goal complete! +${n + subXP} XP — a fruit grew on your tree`; }
   }
-  t.xp = n; addXP(n, t.areaId);
+  t.xp = n; addXP(n, t.areaId, { t: t.title, k: 'task', ref: t.id, g: t.goalId || undefined });
   return msg;
 }
 function reopenTask(t) {
   if (!t.done) return;
-  t.done = false; t.doneAt = null; addXP(-(t.xp || 0), t.areaId); t.xp = 0;
+  t.done = false; t.doneAt = null; addXP(-(t.xp || 0), t.areaId, { ref: t.id }); t.xp = 0;
 }
 function toggleTask(t) {
   const msg = t.done ? (reopenTask(t), '') : completeTask(t);
@@ -344,10 +342,10 @@ function toggleTask(t) {
 function toggleSub(t, s) {
   let msg = '';
   if (s.done) {
-    s.done = false; addXP(-(s.xp || 0), t.areaId); s.xp = 0;
+    s.done = false; addXP(-(s.xp || 0), t.areaId, { ref: t.id + '|' + s.id }); s.xp = 0;
     if (t.done) reopenTask(t);
   } else {
-    s.done = true; s.xp = SXP[s.priority] || 10; addXP(s.xp, t.areaId); msg = `✓ +${s.xp} XP`;
+    s.done = true; s.xp = SXP[s.priority] || 10; addXP(s.xp, t.areaId, { t: s.title + ' (' + t.title + ')', k: 'sub', ref: t.id + '|' + s.id }); msg = `✓ +${s.xp} XP`;
     if (t.subs.every(x => x.done) && !t.done) { const m = completeTask(t); msg = m.replace('Done ✓', `All done: ${t.title} ✓`); }
   }
   save(); render(); if (msg) toast(msg);
@@ -355,23 +353,23 @@ function toggleSub(t, s) {
 function toggleRoutine(r, d, quiet) {
   const k = r.id + '|' + d;
   if (S.routineDone[k]) {
-    delete S.routineDone[k]; addXP(-10, r.areaId);
-    (r.subs || []).forEach(s => { const sk = k + '|' + s.id; if (S.routineSubDone[sk]) { addXP(-S.routineSubDone[sk], r.areaId); delete S.routineSubDone[sk]; } });
+    delete S.routineDone[k]; addXP(-10, r.areaId, { ref: k });
+    (r.subs || []).forEach(s => { const sk = k + '|' + s.id; if (S.routineSubDone[sk]) { addXP(-S.routineSubDone[sk], r.areaId, { ref: sk }); delete S.routineSubDone[sk]; } });
   } else {
     let n = 10;
-    (r.subs || []).forEach(s => { const sk = k + '|' + s.id; if (!S.routineSubDone[sk]) { S.routineSubDone[sk] = SXP[s.priority] || 10; n += S.routineSubDone[sk]; addXP(S.routineSubDone[sk], r.areaId); } });
-    S.routineDone[k] = true; addXP(10, r.areaId); if (!quiet) toast(`Routine done ✓ +${n} XP`);
+    (r.subs || []).forEach(s => { const sk = k + '|' + s.id; if (!S.routineSubDone[sk]) { S.routineSubDone[sk] = SXP[s.priority] || 10; n += S.routineSubDone[sk]; addXP(S.routineSubDone[sk], r.areaId, { t: s.title + ' (' + r.title + ')', k: 'sub', ref: sk }); } });
+    S.routineDone[k] = true; addXP(10, r.areaId, { t: r.title, k: 'routine', ref: k }); if (!quiet) toast(`Routine done ✓ +${n} XP`);
   }
   if (!quiet) { save(); render(); }
 }
 function toggleRoutineSub(r, s, d) {
   const k = r.id + '|' + d, sk = k + '|' + s.id;
   if (S.routineSubDone[sk]) {
-    if (S.routineDone[k]) { delete S.routineDone[k]; addXP(-10, r.areaId); }
-    addXP(-S.routineSubDone[sk], r.areaId); delete S.routineSubDone[sk];
+    if (S.routineDone[k]) { delete S.routineDone[k]; addXP(-10, r.areaId, { ref: k }); }
+    addXP(-S.routineSubDone[sk], r.areaId, { ref: sk }); delete S.routineSubDone[sk];
   } else {
-    S.routineSubDone[sk] = SXP[s.priority] || 10; addXP(S.routineSubDone[sk], r.areaId);
-    if (r.subs.every(x => S.routineSubDone[k + '|' + x.id]) && !S.routineDone[k]) { S.routineDone[k] = true; addXP(10, r.areaId); toast(`All done: ${r.title} ✓`); }
+    S.routineSubDone[sk] = SXP[s.priority] || 10; addXP(S.routineSubDone[sk], r.areaId, { t: s.title + ' (' + r.title + ')', k: 'sub', ref: sk });
+    if (r.subs.every(x => S.routineSubDone[k + '|' + x.id]) && !S.routineDone[k]) { S.routineDone[k] = true; addXP(10, r.areaId, { t: r.title, k: 'routine', ref: k }); toast(`All done: ${r.title} ✓`); }
     else toast(`✓ +${S.routineSubDone[sk]} XP`);
   }
   save(); render();
@@ -454,7 +452,7 @@ function renderToday() {
 
 function renderTasks() {
   const t0 = today();
-  const list = S.tasks.filter(t => filterArea === 'all' || t.areaId === filterArea);
+  const list = S.tasks.filter(t => !t.archived && (filterArea === 'all' || t.areaId === filterArea));
   const open = list.filter(t => !t.done).sort(cmpTask);
   const secs = [
     ['Overdue', open.filter(t => t.due && t.due < t0)],
@@ -463,10 +461,10 @@ function renderTasks() {
     ['No due date', open.filter(t => !t.due)]
   ];
   const done = list.filter(t => t.done).sort((a, b) => (b.doneAt || 0) - (a.doneAt || 0)).slice(0, 30);
-  const cnt = id => S.tasks.filter(t => !t.done && (id === 'all' || t.areaId === id)).length;
+  const cnt = id => S.tasks.filter(t => !t.done && !t.archived && (id === 'all' || t.areaId === id)).length;
   $('#view').innerHTML = `<h2>Tasks</h2>
   <div class="chips"><button class="chip ${filterArea === 'all' ? 'on' : ''}" data-act="filter" data-id="all">All ${cnt('all')}</button>
-  ${S.areas.map(a => `<button class="chip ${filterArea === a.id ? 'on' : ''}" data-act="filter" data-id="${a.id}"><span class="dot" style="background:${a.color}"></span>${esc(a.name)} ${cnt(a.id)}</button>`).join('')}</div>
+  ${activeAreas().map(a => `<button class="chip ${filterArea === a.id ? 'on' : ''}" data-act="filter" data-id="${a.id}"><span class="dot" style="background:${a.color}"></span>${esc(a.name)} ${cnt(a.id)}</button>`).join('')}</div>
   ${open.length ? secs.filter(s => s[1].length).map(([n, ts]) => `<h3>${n} <span>${ts.length}</span></h3>${ts.map(t => taskRow(t)).join('')}`).join('')
       : `<div class="empty">No open tasks here. Tap ＋ to add one.</div>`}
   ${done.length ? `<details><summary class="muted" style="margin:18px 0 8px">Completed (${done.length})</summary>${done.map(t => taskRow(t)).join('')}</details>` : ''}`;
@@ -529,52 +527,238 @@ function renderGoal() {
   <div class="btns"><button class="pri" data-act="claudeadjust" data-id="${g.id}">💬 Adjust with Claude</button><button class="danger" data-act="gdel" data-id="${g.id}">Delete goal</button></div>`;
 }
 
-/* ---------- grow ---------- */
-function treeSVG() {
-  const lv = levelOf(S.xp.total).l, W = 320, H = 270, GY = H - 34;
-  let seed = 11; const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
-  const ar = S.areas.filter(a => (S.xp.byArea[a.id] || 0) > 0), tot = ar.reduce((s, a) => s + S.xp.byArea[a.id], 0);
-  const pick = () => { if (!tot) return '#5cb85c'; let r = rnd() * tot; for (const a of ar) { r -= S.xp.byArea[a.id]; if (r <= 0) return a.color; } return ar[0].color; };
-  let br = '', lf = ''; const tips = [];
-  const depth = Math.min(7, 1 + Math.floor(lv / 2)), len = Math.min(60, 16 + lv * 4);
-  function grow(x, y, l, ang, d) {
-    const x2 = x + l * Math.sin(ang), y2 = y - l * Math.cos(ang);
-    br += `<line x1="${x.toFixed(1)}" y1="${y.toFixed(1)}" x2="${x2.toFixed(1)}" y2="${y2.toFixed(1)}" stroke-width="${Math.max(1.4, d * 1.9).toFixed(1)}"/>`;
-    if (d <= 1) {
-      const n = lv < 3 ? 2 : 3;
-      for (let i = 0; i < n; i++) { const lx = x2 + (rnd() - .5) * 12, ly = y2 + (rnd() - .5) * 10; tips.push([lx, ly]); lf += `<circle cx="${lx.toFixed(1)}" cy="${ly.toFixed(1)}" r="${(4 + rnd() * 3.5).toFixed(1)}" fill="${pick()}" opacity=".9"/>`; }
-    } else {
-      const sp = .32 + rnd() * .22;
-      grow(x2, y2, l * .74, ang - sp, d - 1); grow(x2, y2, l * .74, ang + sp, d - 1);
-      if (d > 3 && rnd() > .55) grow(x2, y2, l * .6, ang + (rnd() - .5) * .4, d - 2);
+function addXP(n, areaId, meta = {}) {
+  if (!n) return;
+  const X = S.xp, before = levelOf(X.total).l;
+  const ar = areaId ? S.areas.find(a => a.id === areaId) : null, rBefore = ar ? roleLevelOf(X.byArea[areaId] || 0).l : 0;
+  X.total = Math.max(0, X.total + n);
+  if (areaId) X.byArea[areaId] = Math.max(0, (X.byArea[areaId] || 0) + n);
+  const d = today(); X.days[d] = Math.max(0, (X.days[d] || 0) + (n > 0 ? 1 : -1)); if (!X.days[d]) delete X.days[d];
+  if (n > 0) S.xpLog.push({ d, a: areaId || null, x: n, t: String(meta.t || '').slice(0, 140), k: meta.k || 'task', ref: meta.ref || null, g: meta.g || undefined });
+  else if (meta.ref) { for (let i = S.xpLog.length - 1; i >= 0; i--) if (S.xpLog[i].ref === meta.ref) { S.xpLog.splice(i, 1); break; } }
+  const after = levelOf(X.total).l, rAfter = ar ? roleLevelOf(X.byArea[areaId]).l : 0;
+  if (n > 0 && (after > before || rAfter > rBefore)) setTimeout(() => {
+    if (rAfter > rBefore) {
+      const newRank = Math.floor(rAfter / 5) > Math.floor(rBefore / 5);
+      notify(`${ar.name} · Level ${rAfter}${newRank ? ' · ' + rankOf(rAfter).name + ' badge!' : ''}`, `New title: ${roleTitle(ar, rAfter)}`);
+    }
+    if (after > before) notify(`Overall level ${after}! 🌳`, `You're now a ${overallTitle(after)}.`);
+    if (navigator.vibrate) navigator.vibrate([100, 60, 100, 60, 250]);
+  }, 400);
+}
+
+/* ---------- role levels, ranks, titles (never-ending) ---------- */
+const RL = l => 60 + 25 * (l - 1);
+function roleLevelOf(xp) { let l = 1, need = RL(1); while (xp >= need) { xp -= need; l++; need = RL(l); } return { l, into: xp, need }; }
+const LADDER_LV = [1, 5, 10, 15, 20, 30, 40, 50];
+const LADDERS = {
+  work: ['Coffee Fetcher', 'Intern', 'Grinder', 'Hustler', 'Closer', 'Big Boss', 'CEO Mode', 'Empire Builder'],
+  providence: ['Clipboard Holder', 'Care Rookie', 'Shift Hero', 'Case Wrangler', 'Ops Captain', 'Care Commander', 'Providence Pillar', 'Legend of Woodbridge'],
+  school: ['Backpack Carrier', 'Note Taker', 'Library Regular', 'All-Nighter', "Dean's List Hopeful", 'Lab Wizard', "Professor's Favorite", 'Doctor Who? (PhD)'],
+  personal: ['Couch Potato', 'Amateur', 'Weekend Warrior', 'Habit Builder', 'Self-Care Pro', 'Zen Master', 'Main Character', 'GOAT'],
+  generic: ['Rookie', 'Amateur', 'Semi-pro', 'Pro', 'Veteran', 'Expert', 'Master', 'Legend']
+};
+const OVERALL = ['Rookie Juggler', 'Apprentice Juggler', 'Seasoned Juggler', 'Skilled Juggler', 'Pro Juggler', 'Master Juggler', 'Grand Juggler', 'Legendary Juggler'];
+function ladderKey(a) {
+  const n = a.name.toLowerCase();
+  if (/work|travail|job|boulot/.test(n)) return 'work';
+  if (/providence/.test(n)) return 'providence';
+  if (/vcu|class|school|cours|ecole|école|study|univ/.test(n)) return 'school';
+  if (/personal|perso/.test(n)) return 'personal';
+  return 'generic';
+}
+function ladderOf(a) {
+  const base = LADDERS[ladderKey(a)].map((t, i) => ({ level: LADDER_LV[i], title: t }));
+  const extra = (a.titles || []).filter(x => x && x.level >= 1 && x.title);
+  const m = new Map(); [...base, ...extra].forEach(x => m.set(x.level, x.title));
+  return [...m.entries()].map(([level, title]) => ({ level, title })).sort((x, y) => x.level - y.level);
+}
+function titleFrom(ladder, L) {
+  let cur = ladder[0];
+  for (const x of ladder) if (x.level <= L) cur = x;
+  const top = ladder[ladder.length - 1];
+  if (cur === top && L >= top.level + 10) { const st = Math.floor((L - top.level) / 10); return cur.title + ' ' + (st <= 5 ? '★'.repeat(st) : '★×' + st); }
+  return cur.title;
+}
+const roleTitle = (a, L) => titleFrom(ladderOf(a), L);
+const overallTitle = L => titleFrom(OVERALL.map((t, i) => ({ level: LADDER_LV[i], title: t })), L);
+const nextTitle = (a, L) => ladderOf(a).find(x => x.level > L);
+const RANKS = [
+  { name: 'Wood', c1: '#a0764e', c2: '#6f4b2d' }, { name: 'Bronze', c1: '#d9925b', c2: '#8f5326' }, { name: 'Silver', c1: '#d9dde3', c2: '#8b95a3' },
+  { name: 'Gold', c1: '#ffd65c', c2: '#c9930c' }, { name: 'Platinum', c1: '#8ee8e0', c2: '#2b9c93' }, { name: 'Diamond', c1: '#9fc8ff', c2: '#3f6fd8' },
+  { name: 'Elite', c1: '#ff8a7a', c2: '#c4302b' }, { name: 'Legend', c1: '#d6a8ff', c2: '#7a3fd0' }
+];
+function rankOf(L) { const i = Math.min(RANKS.length - 1, Math.floor(L / 5)); const stars = L >= 40 ? Math.floor((L - 35) / 5) : 0; return Object.assign({ i, stars }, RANKS[i]); }
+function badgeSVG(L, size = 44, gold) {
+  const r = rankOf(L), id = 'bg' + uid(), R = size / 2;
+  const hex = k => [0, 1, 2, 3, 4, 5].map(j => { const a = Math.PI / 3 * j - Math.PI / 2; return `${(R + k * Math.cos(a)).toFixed(1)},${(R + k * Math.sin(a)).toFixed(1)}`; }).join(' ');
+  const c1 = gold ? '#ffd65c' : r.c1, c2 = gold ? '#c9930c' : r.c2;
+  let rings = ''; for (let i = 0; i < Math.min(r.i, 4); i++) rings += `<polygon points="${hex(R * (0.62 - i * 0.1))}" fill="none" stroke="#fff" stroke-opacity="${0.35 + i * 0.1}" stroke-width="1"/>`;
+  let st = ''; const ns = Math.min(5, r.stars); for (let i = 0; i < ns; i++) st += `<text x="${R + (i - (ns - 1) / 2) * size * 0.16}" y="${size * 0.98}" font-size="${size * 0.2}" text-anchor="middle" fill="#ffd65c">★</text>`;
+  return `<svg width="${size}" height="${size + (ns ? size * 0.12 : 0)}" viewBox="0 0 ${size} ${size + (ns ? size * 0.12 : 0)}" aria-hidden="true"><defs><linearGradient id="${id}" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="${c1}"/><stop offset="1" stop-color="${c2}"/></linearGradient></defs>
+  <polygon points="${hex(R * .95)}" fill="url(#${id})" stroke="${c2}" stroke-width="1.5"/>${rings}
+  <text x="${R}" y="${R + size * 0.12}" font-size="${size * 0.32}" font-weight="700" text-anchor="middle" fill="#fff" style="paint-order:stroke" stroke="${c2}" stroke-width="2">${L}</text>${st}</svg>`;
+}
+
+/* ---------- ratings for the card & radar ---------- */
+const activeAreas = () => S.areas.filter(a => !a.closed);
+const roleRating = L => Math.min(99, Math.round(40 + 59 * (1 - Math.exp(-(L - 1) / 18))));
+function consistencyRating() { let n = 0; for (let i = 0; i < 28; i++) if (S.xp.days[addDays(today(), -i)] > 0) n++; return Math.round(25 + 74 * n / 28); }
+function goalsRating() {
+  const cut = addDays(today(), -30), steps = S.xpLog.filter(e => e.g && e.d >= cut).length;
+  if (!S.goals.length) return 25;
+  return Math.min(99, Math.round(35 + goalsDone() * 10 + steps * 3));
+}
+function form() {
+  let a = 0, b = 0; for (const e of S.xpLog) { const n = (parseYmd(today()) - parseYmd(e.d)) / 864e5; if (n < 7) a += e.x; else if (n < 14) b += e.x; }
+  return a > b * 1.1 ? ['↑', 'up', 'var(--ok)'] : a < b * 0.9 ? ['↓', 'down', 'var(--danger)'] : ['→', 'steady', 'var(--mu)'];
+}
+function radarSVG(items) {
+  const W = 360, H = 260, cx = 180, cy = 132, R = 84, n = items.length;
+  const pt = (i, v) => { const a = -Math.PI / 2 + 2 * Math.PI * i / n; return [cx + R * v * Math.cos(a), cy + R * v * Math.sin(a)]; };
+  const ring = v => items.map((_, i) => pt(i, v).map(x => x.toFixed(1)).join(',')).join(' ');
+  const poly = items.map((it, i) => pt(i, it.v / 99).map(x => x.toFixed(1)).join(',')).join(' ');
+  const labels = items.map((it, i) => { const [x, y] = pt(i, 1.18), anc = Math.abs(x - cx) < 8 ? 'middle' : x > cx ? 'start' : 'end'; return `<text x="${x.toFixed(1)}" y="${(y + 4).toFixed(1)}" text-anchor="${anc}" font-size="11.5" fill="var(--mu)">${esc(it.label)} <tspan font-weight="700" fill="var(--tx)">${it.v}</tspan></text>`; }).join('');
+  return `<svg viewBox="0 0 ${W} ${H}" width="100%" style="display:block" role="img" aria-label="Radar chart of your attributes">
+  <g fill="none" stroke="var(--ln)">${[1, .66, .33].map(v => `<polygon points="${ring(v)}"/>`).join('')}${items.map((_, i) => { const [x, y] = pt(i, 1); return `<line x1="${cx}" y1="${cy}" x2="${x.toFixed(1)}" y2="${y.toFixed(1)}"/>`; }).join('')}</g>
+  <polygon points="${poly}" fill="var(--ac)" fill-opacity=".2" stroke="var(--ac)" stroke-width="2"/>
+  ${items.map((it, i) => { const [x, y] = pt(i, it.v / 99); return `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="3.5" fill="${it.c || 'var(--ac)'}"/>`; }).join('')}${labels}</svg>`;
+}
+
+/* ---------- history: which level was each thing earned in ---------- */
+function roleHistory(a) {
+  const es = S.xpLog.filter(e => e.a === a.id);
+  let xp = 0; const nodes = {};
+  for (const e of es) {
+    const L = roleLevelOf(xp).l; xp += e.x;
+    (nodes[L] = nodes[L] || []).push(e);
+  }
+  return nodes;
+}
+function skillOf(a, title) {
+  const t = String(title || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+  for (const s of a.skills || []) if ((s.keywords || []).some(k => k && t.includes(String(k).toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')))) return s.name;
+  return null;
+}
+function nodeSkill(a, list) {
+  const c = {}; (list || []).forEach(e => { const s = skillOf(a, e.t); if (s) c[s] = (c[s] || 0) + e.x; });
+  const top = Object.entries(c).sort((x, y) => y[1] - x[1])[0]; return top ? top[0] : null;
+}
+function initHistory() {
+  if (S.xpLogInit) return;
+  S.xpLogInit = true;
+  const back = S.tasks.filter(t => t.done && t.doneAt).sort((a, b) => a.doneAt - b.doneAt)
+    .map(t => ({ d: ymd(new Date(t.doneAt)), a: t.areaId, x: t.xp || XPP[t.priority] || 20, t: t.title, k: 'task', ref: t.id, g: t.goalId || undefined }));
+  const sum = {}; back.forEach(e => sum[e.a] = (sum[e.a] || 0) + e.x);
+  const first = back[0] ? back[0].d : today(), pre = [];
+  for (const id in S.xp.byArea) { const diff = (S.xp.byArea[id] || 0) - (sum[id] || 0); if (diff > 0) pre.push({ d: first, a: id, x: diff, t: 'Earlier progress', k: 'past' }); }
+  S.xpLog = [...pre, ...back, ...S.xpLog.filter(e => !back.some(b => b.ref === e.ref))];
+  save();
+}
+
+/* ---------- Grow page ---------- */
+let growTab = 'card', treeSel = null, treeScroll = 0;
+function renderGrow() {
+  $('#view').innerHTML = `<div class="seg" style="background:var(--card2);padding:3px;border-radius:12px;margin:0 0 12px">
+    <button class="${growTab === 'card' ? 'on' : ''}" data-act="gtab" data-id="card">Card</button><button class="${growTab === 'tree' ? 'on' : ''}" data-act="gtab" data-id="tree">Skill tree</button></div>
+  ${growTab === 'card' ? cardHTML() : treeHTML()}`;
+  if (growTab === 'tree') { const w = $('#treewrap'); if (w && treeSel == null) w.scrollTop = treeScroll; }
+}
+function cardHTML() {
+  const L = levelOf(S.xp.total), st = streak(), f = form(), act = activeAreas(), closed = S.areas.filter(a => a.closed);
+  const items = act.map(a => ({ label: a.name.length > 11 ? a.name.split(/[ /]/)[0].slice(0, 11) : a.name, v: roleRating(roleLevelOf(S.xp.byArea[a.id] || 0).l), c: a.color }))
+    .concat([{ label: 'Consistency', v: consistencyRating() }, { label: 'Goals', v: goalsRating() }]);
+  const ovr = Math.round(items.reduce((s, i) => s + i.v, 0) / items.length);
+  const roleCard = a => {
+    const R = roleLevelOf(S.xp.byArea[a.id] || 0), nt = nextTitle(a, R.l);
+    return `<div class="card rc" data-act="treerole" data-id="${a.id}" style="${a.closed ? 'background:linear-gradient(135deg,#fff3c4,#f3d27a);color:#5b4205' : ''}">
+      <div style="display:flex;gap:8px;align-items:center">${badgeSVG(R.l, 38, a.closed)}<div style="min-width:0"><div class="rcn" style="${a.closed ? 'color:#7a5a10' : ''}"><span class="dot" style="background:${a.color}"></span>${esc(a.name)}</div>
+      <b>${esc(roleTitle(a, R.l))}</b></div></div>
+      ${a.closed ? `<div style="font-size:12px;margin-top:6px">🎓 Closed ${parseYmd(a.closed).toLocaleDateString(undefined, { month: 'short', year: 'numeric' })}</div>`
+        : `<div class="bal" style="height:6px;margin-top:8px"><i style="flex:${R.into || 0.0001};background:${a.color}"></i><i style="flex:${R.need - R.into};background:transparent"></i></div>
+      <div class="muted" style="font-size:11.5px">${nt ? `Next: ${esc(nt.title)} at Lv ${nt.level}` : `${R.into}/${R.need} XP`}</div>`}</div>`;
+  };
+  return `<div class="card pcard"><div style="display:flex;gap:14px;align-items:center">
+    <div class="ovr"><div style="font-size:34px;font-weight:800;line-height:1">${ovr}</div><div style="font-size:11px;letter-spacing:.08em">OVR</div><div style="font-size:12px;margin-top:4px">Lv ${L.l}</div></div>
+    <div style="min-width:0;flex:1"><div style="font-size:18px;font-weight:700">${overallTitle(L.l)}</div>
+    <div class="muted">Form <b style="color:${f[2]}">${f[0]} ${f[1]}</b>${st ? ` · 🔥 ${st}-day streak` : ''}</div>
+    <div class="bal" style="height:7px;margin-top:8px"><i style="flex:${L.into || 0.0001};background:var(--ac)"></i><i style="flex:${L.need - L.into};background:transparent"></i></div>
+    <div class="muted" style="font-size:12px">${L.into} / ${L.need} XP to Lv ${L.l + 1}</div></div></div>
+    ${radarSVG(items)}</div>
+  <h3>Your roles</h3><div class="rgrid">${act.map(roleCard).join('')}</div>
+  ${closed.length ? `<h3>🏛 Hall of Fame</h3><div class="rgrid">${closed.map(roleCard).join('')}</div>` : ''}
+  <p class="hint">Tasks: High +30 · Normal +20 · Low +10 · Subtask +5–15 · Routine +10 · Focus +15 · Milestone +50 · Goal +150. A new rank badge every 5 levels in a role.</p>`;
+}
+function treeHTML() {
+  const L = levelOf(S.xp.total).l, roles = S.areas;
+  const theme = L < 5 ? ['#ffd9b8', '#fff4e6', 'dawn'] : L < 15 ? ['#bfe3ff', '#eef8ff', 'day'] : L < 30 ? ['#ffb38a', '#7a5aa8', 'sunset'] : ['#0b1530', '#27305c', 'night'];
+  const SP = 46, COL = 104, top = 70;
+  const data = roles.map(a => { const R = roleLevelOf(S.xp.byArea[a.id] || 0); return { a, R, hist: roleHistory(a) }; });
+  const maxN = Math.max(6, ...data.map(x => x.R.l + (x.a.closed ? 0 : 3)));
+  const W = Math.max(340, roles.length * COL + 40), H = top + maxN * SP + 150, cx = W / 2, base = H - 40, fork = H - 110;
+  treeScroll = Math.max(0, (fork - 40 - (Math.max(...data.map(x => x.R.l)) - 1) * SP) - 160);
+  const colX = i => 20 + COL / 2 + i * COL + (W - 40 - roles.length * COL) / 2;
+  const nodeY = l => fork - 40 - (l - 1) * SP;
+  const wig = (i, l) => Math.sin(l * 0.8 + i * 1.7) * 9;
+  let stars = ''; if (theme[2] === 'night') { let sd = 3; const r = () => (sd = (sd * 16807) % 2147483647) / 2147483647; for (let i = 0; i < 40; i++) stars += `<circle cx="${(r() * W).toFixed(0)}" cy="${(r() * H * .7).toFixed(0)}" r="${(r() * 1.4 + .3).toFixed(1)}" fill="#fff" opacity="${(.4 + r() * .6).toFixed(2)}"/>`; }
+  let g = `<path d="M${cx - 16} ${base} C${cx - 10} ${fork + 30} ${cx - 6} ${fork + 10} ${cx} ${fork} C${cx + 6} ${fork + 10} ${cx + 10} ${fork + 30} ${cx + 16} ${base} Z" fill="#7a4a24"/>`;
+  let nodes = '', labels = '';
+  data.forEach(({ a, R, hist }, i) => {
+    const x0 = colX(i), col = a.closed ? '#e0b12e' : a.color, reached = R.l, show = a.closed ? reached : reached + 3;
+    const pts = [[cx, fork]]; for (let l = 1; l <= show; l++) pts.push([x0 + wig(i, l), nodeY(l)]);
+    const path = (from, to) => { let d = `M${pts[from][0].toFixed(1)} ${pts[from][1].toFixed(1)}`; for (let k = from + 1; k <= to; k++) { const [px, py] = pts[k - 1], [qx, qy] = pts[k]; d += ` C${px.toFixed(1)} ${(py - SP * .45).toFixed(1)} ${qx.toFixed(1)} ${(qy + SP * .45).toFixed(1)} ${qx.toFixed(1)} ${qy.toFixed(1)}`; } return d; };
+    g += `<path d="${path(0, reached)}" stroke="${col}" stroke-width="${a.closed ? 7 : 6}" fill="none" stroke-linecap="round" opacity=".95"/>`;
+    if (show > reached) g += `<path d="${path(reached, show)}" stroke="var(--mu)" stroke-width="2.5" fill="none" stroke-dasharray="5 6" opacity=".55"/>`;
+    let lastSkill = null;
+    for (let l = 1; l <= show; l++) {
+      const [x, y] = pts[l], got = l <= reached, sel = treeSel && treeSel.a === a.id && treeSel.l === l, cur = l === reached && !a.closed;
+      if (l % 5 === 0) nodes += `<g data-act="tnode" data-id="${a.id}|${l}" style="cursor:pointer" opacity="${got ? 1 : .45}" transform="translate(${(x - 20).toFixed(1)},${(y - 20).toFixed(1)})">${badgeSVG(l, 40, a.closed && got)}</g>`;
+      else nodes += `<g data-act="tnode" data-id="${a.id}|${l}" style="cursor:pointer">${got ? `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="${cur ? 15 : 12}" fill="${col}" opacity=".25"/>` : ''}
+        <circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="${cur ? 11 : 9}" fill="${got ? col : 'var(--card2)'}" stroke="${sel ? 'var(--tx)' : got ? '#fff' : 'var(--mu)'}" stroke-width="${sel ? 3 : 2}" ${got ? '' : 'stroke-dasharray="3 3"'}/>
+        <text x="${x.toFixed(1)}" y="${(y + 4).toFixed(1)}" font-size="10" font-weight="700" text-anchor="middle" fill="${got ? '#fff' : 'var(--mu)'}">${got ? l : '🔒'}</text>${cur ? `<circle class="pulse" cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="11" fill="none" stroke="${col}" stroke-width="2"/>` : ''}</g>`;
+      const sk = got ? nodeSkill(a, hist[l]) : null;
+      const left = i === roles.length - 1 && roles.length > 1;
+      if (sk && sk !== lastSkill) labels += `<text x="${(x + (left ? -17 : 17)).toFixed(1)}" y="${(y + 4).toFixed(1)}" font-size="9.5" text-anchor="${left ? 'end' : 'start'}" class="tlab">${esc(sk.length > 13 ? sk.slice(0, 12) + '…' : sk)}</text>`;
+      if (sk) lastSkill = sk;
+    }
+    // goals as side twigs
+    S.goals.filter(gl => gl.areaId === a.id).forEach((gl, j) => {
+      const st = goalStats(gl), done = st.total && st.done === st.total;
+      const lastDone = st.ts.filter(t => t.doneAt).sort((p, q) => q.doneAt - p.doneAt)[0];
+      let lvAt = reached;
+      if (done && lastDone) { let xp = 0; for (const e of S.xpLog) { if (e.a !== a.id) continue; xp += e.x; if (e.ref === lastDone.id) break; } lvAt = Math.min(reached, roleLevelOf(xp).l); }
+      const [x, y] = pts[Math.max(1, lvAt)] || pts[pts.length - 1], dx = (j % 2 ? -1 : 1) * (i === roles.length - 1 ? -1 : 1) * 38, gx = x + dx, gy = y - 18 - j * 8;
+      g += `<path d="M${x.toFixed(1)} ${y.toFixed(1)} Q${(x + dx * .4).toFixed(1)} ${(y - 4).toFixed(1)} ${gx.toFixed(1)} ${gy.toFixed(1)}" stroke="${done ? '#e0b12e' : 'var(--goal)'}" stroke-width="3" fill="none" ${done ? '' : 'stroke-dasharray="4 4"'}/>`;
+      nodes += `<g data-act="goal" data-id="${gl.id}" style="cursor:pointer"><circle cx="${gx.toFixed(1)}" cy="${gy.toFixed(1)}" r="11" fill="${done ? '#ffd65c' : 'var(--card)'}" stroke="${done ? '#c9930c' : 'var(--goal)'}" stroke-width="2"/>
+        <text x="${gx.toFixed(1)}" y="${(gy + 4).toFixed(1)}" font-size="11" text-anchor="middle">${done ? '🍋' : '🎯'}</text></g>`;
+    });
+    labels += `<text x="${x0.toFixed(1)}" y="${(nodeY(show) - 34).toFixed(1)}" font-size="12.5" font-weight="700" text-anchor="middle" class="tlab">${a.closed ? '🎓 ' : ''}${esc(a.name)}</text>
+      <text x="${x0.toFixed(1)}" y="${(nodeY(show) - 19).toFixed(1)}" font-size="10.5" text-anchor="middle" class="tlab2">Lv ${reached} · ${esc(roleTitle(a, reached))}</text>`;
+  });
+  const svg = `<svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" style="display:block;min-width:100%" role="img" aria-label="Your skill tree" data-th="${theme[2] === 'dawn' || theme[2] === 'day' ? 'light' : 'dark'}">
+    <defs><linearGradient id="tsky" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${theme[0]}"/><stop offset="1" stop-color="${theme[1]}"/></linearGradient></defs>
+    <rect width="${W}" height="${H}" fill="url(#tsky)"/>${stars}
+    <ellipse cx="${cx}" cy="${H + 30}" rx="${W * .75}" ry="80" fill="${theme[2] === 'night' ? '#1d3b2a' : '#9fd17f'}"/>
+    ${g}${nodes}${labels}</svg>`;
+  let detail = '';
+  if (treeSel) {
+    const a = S.areas.find(x => x.id === treeSel.a);
+    if (a) {
+      const list = (roleHistory(a)[treeSel.l] || []).slice().reverse(), R = roleLevelOf(S.xp.byArea[a.id] || 0);
+      const sk = nodeSkill(a, list), dates = list.map(e => e.d).sort();
+      detail = `<div class="card" style="margin-top:10px"><div style="display:flex;justify-content:space-between;gap:8px;align-items:baseline"><b><span class="dot" style="background:${a.color}"></span>${esc(a.name)} · Level ${treeSel.l}</b>
+        <span class="muted">${dates.length ? fmtShort(dates[0]) + (dates[dates.length - 1] !== dates[0] ? ' – ' + fmtShort(dates[dates.length - 1]) : '') : ''}</span></div>
+        <div class="muted" style="margin:2px 0 6px">${treeSel.l > R.l ? `Locked · reach it to unlock${treeSel.l % 5 === 0 ? ' the ' + rankOf(treeSel.l).name + ' badge' : ''}` : `${esc(roleTitle(a, treeSel.l))}${sk ? ' · Skill: ' + esc(sk) : ''}${treeSel.l % 5 === 0 ? ' · ' + rankOf(treeSel.l).name + ' badge' : ''}`}</div>
+        ${list.length ? list.slice(0, 40).map(e => `<div class="hrow"><span>${e.k === 'routine' ? '↻' : e.k === 'focus' ? '⏱' : e.k === 'past' ? '•' : '✓'}</span><span style="flex:1">${esc(e.t || 'Done')}</span><span class="muted">+${e.x} · ${fmtShort(e.d)}</span></div>`).join('')
+          : `<div class="muted">${treeSel.l <= R.l ? 'Nothing logged here.' : ''}</div>`}</div>`;
     }
   }
-  if (lv === 1) {
-    const p = Math.min(1, S.xp.total / LVL(1));
-    br = `<ellipse cx="160" cy="${GY - 4}" rx="9" ry="6" fill="#8b5a2b"/>` + (p > 0 ? `<path d="M160 ${GY - 8} q-2 -${10 + p * 14} -8 -${12 + p * 16}" stroke="#4caf50" stroke-width="3" fill="none"/><ellipse cx="150" cy="${GY - 22 - p * 16}" rx="7" ry="4" fill="#5cb85c" transform="rotate(-30 150 ${GY - 22 - p * 16})"/>` : '');
-  } else grow(W / 2, GY, len, 0, depth);
-  const fruits = Math.min(goalsDone(), tips.length);
-  let fr = ''; for (let i = 0; i < fruits; i++) { const [x, y] = tips[Math.floor((i * 7919) % tips.length)]; fr += `<circle cx="${x.toFixed(1)}" cy="${(y + 4).toFixed(1)}" r="6" fill="#ffc83d" stroke="#d99a00" stroke-width="1.5"/>`; }
-  return `<svg viewBox="0 0 ${W} ${H}" width="100%" style="display:block;max-height:300px" role="img" aria-label="Your growth tree, level ${lv}">
-  <defs><linearGradient id="sky" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="var(--sky1)"/><stop offset="1" stop-color="var(--sky2)"/></linearGradient></defs>
-  <rect width="${W}" height="${H}" rx="14" fill="url(#sky)"/><ellipse cx="160" cy="${GY + 22}" rx="190" ry="34" fill="var(--hill)"/>
-  <g stroke="#7a4a24" stroke-linecap="round">${br}</g><g>${lf}</g><g>${fr}</g></svg>`;
+  return `<div class="treewrap" id="treewrap">${svg}</div>
+  <p class="hint" style="text-align:center">Tap a level to see what you did to reach it · swipe sideways for all roles</p>
+  ${detail}
+  <div class="btns"><button data-act="organize">✨ Organize with Claude</button></div>`;
 }
-function renderGrow() {
-  const L = levelOf(S.xp.total), st = streak(), ar = S.areas.filter(a => (S.xp.byArea[a.id] || 0) > 0);
-  const wk = weekStart(today()); let wkDone = 0; for (const d in S.xp.days) if (d >= wk) wkDone += S.xp.days[d];
-  $('#view').innerHTML = `<div class="card" style="padding:10px">${treeSVG()}
-  <div style="display:flex;justify-content:space-between;align-items:baseline;margin-top:10px"><b style="font-size:18px">Level ${L.l} · ${stageOf(L.l)}</b><span>${st ? `🔥 ${st}-day streak` : '<span class="muted">Finish 1 thing to start a streak</span>'}</span></div>
-  <div class="bal" style="height:10px"><i style="flex:${L.into || 0.0001};background:var(--ac)"></i><i style="flex:${L.need - L.into};background:transparent"></i></div>
-  <div class="muted">${L.into} / ${L.need} XP to level ${L.l + 1} · ${S.xp.total} XP total</div></div>
-  <h3>This week</h3>
-  <div class="card"><div style="display:flex;justify-content:space-around;text-align:center">
-    <div><b style="font-size:22px">${wkDone}</b><div class="muted">things done</div></div>
-    <div><b style="font-size:22px">${goalsDone()}</b><div class="muted">🍋 goals completed</div></div>
-    <div><b style="font-size:22px">${S.goals.length - goalsDone()}</b><div class="muted">🎯 goals active</div></div></div>
-  ${ar.length ? `<div class="leg" style="margin-top:10px;justify-content:center">Leaves: ${ar.map(a => `<span><span class="dot" style="background:${a.color}"></span>${esc(a.name)}</span>`).join('')}</div>` : ''}</div>
-  <p class="hint">High +30 · Normal +20 · Low +10 · Subtask +5–15 · Routine +10 · Focus +15 · Milestone +50 · Goal done +150</p>`;
-}
+
 function renderLvl() { const L = levelOf(S.xp.total), st = streak(); $('#lvl').textContent = `Lv ${L.l}${st ? ' 🔥' + st : ''}`; }
 /* ---------- focus timer ---------- */
 function T() {
@@ -593,7 +777,7 @@ function fComplete() {
     const task = S.tasks.find(x => x.id === t.taskId), min = S.settings.pomo;
     if (task) task.focusMin = (task.focusMin || 0) + min;
     S.focusLog.push({ date: today(), min, areaId: task ? task.areaId : null });
-    addXP(15, task ? task.areaId : null);
+    addXP(15, task ? task.areaId : null, { t: 'Focus session' + (task ? ': ' + task.title : ''), k: 'focus' });
     notify('Focus session done 🎉 +15 XP', `Take a ${S.settings.brk}-minute break.`);
   } else notify('Break over', 'Back to it 💪');
   switchMode();
@@ -776,7 +960,7 @@ function ask(msg, yes = 'Delete') {
 }
 let toastT;
 function toast(msg) { const t = $('#toast'); t.textContent = msg; t.classList.add('show'); clearTimeout(toastT); toastT = setTimeout(() => t.classList.remove('show'), 2600); }
-const areaOpts = v => S.areas.map(a => `<option value="${a.id}" ${a.id === v ? 'selected' : ''}>${esc(a.name)}</option>`).join('');
+const areaOpts = v => S.areas.filter(a => !a.closed || a.id === v).map(a => `<option value="${a.id}" ${a.id === v ? 'selected' : ''}>${esc(a.name)}</option>`).join('');
 const estOpts = v => [15, 30, 45, 60, 90, 120, 180, 240].map(m => `<option value="${m}" ${v == m ? 'selected' : ''}>${fmtDur(m)}</option>`).join('');
 
 /* ---------- the ＋ editor: task or routine, dates, repeat, subtasks ---------- */
@@ -927,7 +1111,8 @@ function settingsForm() {
   const s = S.settings, perm = 'Notification' in window ? Notification.permission : 'unsupported';
   openSheet(`<form id="sf"><h2>Settings</h2>
   <h3>Your roles</h3>
-  ${S.areas.map(a => `<div class="arow"><input type="color" name="c_${a.id}" value="${a.color}"><input type="text" name="n_${a.id}" value="${esc(a.name)}"><button type="button" class="ib" data-act="adel" data-id="${a.id}" aria-label="Delete role">✕</button></div>`).join('')}
+  ${S.areas.map(a => `<div class="arow"><input type="color" name="c_${a.id}" value="${a.color}"><input type="text" name="n_${a.id}" value="${esc(a.name)}">${a.closed ? `<button type="button" class="ib" data-act="areopen" data-id="${a.id}" title="Reopen">↩︎</button>` : `<button type="button" class="ib" data-act="aclose" data-id="${a.id}" aria-label="Close this chapter" title="Close chapter">🎓</button>`}<button type="button" class="ib" data-act="adel" data-id="${a.id}" aria-label="Delete role">✕</button></div>${a.closed ? `<div class="hint" style="margin:-2px 0 8px">🏛 Chapter closed ${parseYmd(a.closed).toLocaleDateString(undefined, { month: 'short', year: 'numeric' })} · in your Hall of Fame</div>` : ''}`).join('')}
+  <p class="hint">🎓 = close a chapter (graduated, changed job…): the role turns gold, keeps its level and leaves the radar. ↩︎ reopens it.</p>
   <button type="button" class="ib" data-act="aadd">＋ Add role</button>
   <h3>Reminders & nudges</h3>
   <div class="two"><label>☀️ Morning nudge<input type="time" name="morning" value="${s.morning || ''}"></label><label>🌙 Evening nudge<input type="time" name="evening" value="${s.evening || ''}"></label></div>
@@ -977,8 +1162,8 @@ const JSON_SPEC = `\`\`\`json
 }
 \`\`\``;
 function ctxBlock() {
-  const open = S.tasks.filter(t => !t.done).sort(cmpTask);
-  return [`Today is ${DAYNAME(today())}. My roles: ${S.areas.map(a => a.name).join(', ')}.`, '', 'MY ROUTINES:',
+  const open = S.tasks.filter(t => !t.done && !t.archived).sort(cmpTask);
+  return [`Today is ${DAYNAME(today())}. My roles: ${activeAreas().map(a => a.name).join(', ')}.`, '', 'MY ROUTINES:',
     S.routines.length ? S.routines.map(r => `- ${r.title} [${area(r.areaId).name}] — ${repLabel(r)}${r.time ? ' at ' + r.time : ''}`).join('\n') : '- none',
     '', 'MY OPEN TO-DOS (id | title | role | priority 1=high | start | done by | subtasks done):',
     open.length ? open.map(t => `- ${t.id} | ${t.title} | ${area(t.areaId).name} | P${t.priority} | ${t.start || t.schedDate || '—'} | ${t.due || "don't know yet"} | ${t.subs.length ? t.subs.filter(s => s.done).length + '/' + t.subs.length : '—'}`).join('\n') : '- none'].join('\n');
@@ -1110,6 +1295,59 @@ function claudeImport() {
   <div class="btns"><button class="pri" type="button" data-act="cclose">Looks good</button><button type="button" class="danger" data-act="cundo">Undo</button></div>`);
 }
 
+/* ---------- Organize my skill tree with Claude ---------- */
+function organizePrompt() {
+  const fr = S.settings.lang === 'fr';
+  const lines = [fr ? 'Réponds-moi en français.' : 'Reply in the language of my latest message (English or French).', '',
+    'Please ORGANIZE MY SKILL TREE in my app Juggle. Below is my history per role (what I completed, how often, when).', '',
+    'For EACH role:', '1) Group my history into 3–8 named SKILLS (short, fun, specific names, like game perks: "Payroll Pro", "MATLAB Labs", "Exam Prep"). For each skill give 3–8 lowercase keywords (EN and FR) that appear in my task titles, so the app can match future tasks.',
+    '2) Write my NEXT CHAPTER of titles: 6–8 new titles for levels ABOVE my current level (spaced about every 5 levels), funny but motivating, matching what I actually do in that role now. Keep growing them forever, never an ending.', '',
+    'You can ask me a couple of questions first if useful. When I say "final plan", reply with ONE json code block exactly like this:',
+    '```json\n{"skills":[{"area":"<role name exactly>","name":"","keywords":["",""]}],\n "titles":[{"area":"<role name exactly>","level":25,"title":""}]}\n```',
+    'Keep "area" exactly as my role names below. Never translate keys.', '', 'MY ROLES & HISTORY:'];
+  S.areas.forEach(a => {
+    const R = roleLevelOf(S.xp.byArea[a.id] || 0), es = S.xpLog.filter(e => e.a === a.id && e.k !== 'past');
+    const cnt = {}; es.forEach(e => { const k = String(e.t || '').replace(/\s*\(.*\)$/, '').trim(); if (k) { cnt[k] = cnt[k] || { n: 0, last: e.d }; cnt[k].n++; cnt[k].last = e.d; } });
+    const top = Object.entries(cnt).sort((x, y) => y[1].n - x[1].n).slice(0, 60);
+    lines.push('', `## ${a.name}${a.closed ? ' (CHAPTER CLOSED ' + a.closed + ' — no new titles needed, but name its skills)' : ''} — Level ${R.l}, title "${roleTitle(a, R.l)}"`,
+      `Current title ladder: ${ladderOf(a).map(x => x.level + ': ' + x.title).join(' · ')}`,
+      top.length ? top.map(([t, v]) => `- ${t} ×${v.n} (last ${v.last})`).join('\n') : '- (no history yet)');
+  });
+  return lines.join('\n');
+}
+function organizeSheet() {
+  openSheet(`<h2>✨ Organize with Claude</h2>
+  <p class="muted">Claude groups your history into named skills for each role (shown on your tree) and writes your next chapter of titles.</p>
+  <div class="erow"><span>Language</span><button type="button" class="chip ${S.settings.lang !== 'fr' ? 'on' : ''}" data-act="olang" data-id="en">English</button><button type="button" class="chip ${S.settings.lang === 'fr' ? 'on' : ''}" data-act="olang" data-id="fr">Français</button></div>
+  <div class="btns"><button class="pri" type="button" data-act="ocopy">1 · Copy my history for Claude</button></div>
+  <p class="muted">2 · Paste it in your Juggle Planner project, chat if you want, then ask for the final plan.</p>
+  <textarea id="cout" readonly hidden style="min-height:120px;font-size:13px"></textarea>
+  <label style="margin-top:12px">3 · Paste Claude's reply<textarea id="oin" placeholder="Juggle finds the json part automatically" style="min-height:90px"></textarea></label>
+  <div class="btns"><button class="pri" type="button" data-act="oimport">Update my tree</button></div>`);
+}
+function organizeImport() {
+  const raw = $('#oin').value, blocks = [...raw.matchAll(/```(?:json)?\s*([\s\S]*?)```/g)].map(x => x[1]);
+  let data = null;
+  for (const b of [...blocks.reverse(), (raw.match(/(\{[\s\S]*\})/) || [])[1]]) { try { if (b) { data = JSON.parse(b); break; } } catch (e) { } }
+  if (!data) return toast("Couldn't find the json in that reply");
+  const before = JSON.stringify(S); let ns = 0, nt = 0;
+  const bySkill = {};
+  (Array.isArray(data.skills) ? data.skills : []).forEach(x => {
+    if (!x || !String(x.name || '').trim()) return;
+    const id = findArea(x.area); (bySkill[id] = bySkill[id] || []).push({ name: String(x.name).trim().slice(0, 40), keywords: (Array.isArray(x.keywords) ? x.keywords : []).map(k => String(k).toLowerCase().trim()).filter(Boolean).slice(0, 12) }); ns++;
+  });
+  for (const id in bySkill) { const a = S.areas.find(x => x.id === id); if (a) a.skills = bySkill[id]; }
+  (Array.isArray(data.titles) ? data.titles : []).forEach(x => {
+    if (!x || !String(x.title || '').trim() || !(+x.level >= 2)) return;
+    const a = S.areas.find(y => y.id === findArea(x.area)); if (!a) return;
+    a.titles = (a.titles || []).filter(t => t.level !== +x.level); a.titles.push({ level: Math.round(+x.level), title: String(x.title).trim().slice(0, 50) }); nt++;
+  });
+  if (!ns && !nt) return toast('Nothing to import in that reply');
+  claudeUndo = before; save(); growTab = 'tree'; view = 'grow'; render();
+  openSheet(`<h2>Tree updated ✓</h2><p>${ns} skills named · ${nt} new titles unlocked ahead</p>
+  <div class="btns"><button class="pri" type="button" data-act="cclose">Show my tree</button><button type="button" class="danger" data-act="cundo">Undo</button></div>`);
+}
+
 /* ---------- actions ---------- */
 const go = v => () => { closeSheet(); view = v; window.scrollTo(0, 0); render(); };
 const actions = {
@@ -1135,6 +1373,28 @@ const actions = {
   focustask: id => { const t = T(); t.taskId = id; if (!t.running) { t.mode = 'work'; t.remaining = fullLen(); } save(); closeSheet(); view = 'focus'; render(); },
   gofocus: go('focus'), gogrow: go('grow'), gomore: go('more'), gogoals: go('goals'), gohours: () => { tlScrolled = false; go('hours')(); },
   goal: id => { curGoal = id; go('goal')(); },
+  gtab: k => { growTab = k; treeSel = null; render(); },
+  tnode: v => { const [a, l] = v.split('|'); treeSel = treeSel && treeSel.a === a && treeSel.l === +l ? null : { a, l: +l }; const w = $('#treewrap'), sl = w ? w.scrollLeft : 0, st = w ? w.scrollTop : 0; render(); const w2 = $('#treewrap'); if (w2) { w2.scrollLeft = sl; w2.scrollTop = st; } },
+  treerole: id => { const a = S.areas.find(x => x.id === id); growTab = 'tree'; treeSel = { a: id, l: roleLevelOf(S.xp.byArea[id] || 0).l }; render(); const w = $('#treewrap'); if (w) { const i = S.areas.indexOf(a); w.scrollLeft = Math.max(0, i * 104 - 120); } },
+  organize: organizeSheet, ocopy: () => copyText(organizePrompt(), 'Copied ✓ Paste it into your Juggle Planner chat'), oimport: organizeImport,
+  olang: k => { S.settings.lang = k; save(); organizeSheet(); },
+  aclose: async id => {
+    applySettings();
+    const a = area(id), L = roleLevelOf(S.xp.byArea[id] || 0).l, open = S.tasks.filter(t => t.areaId === id && !t.done).length;
+    if (activeAreas().length < 2) return toast('Keep at least one active role');
+    if (!await ask(`Close the "${a.name}" chapter? It turns gold in your Hall of Fame at Lv ${L} · ${roleTitle(a, L)}, leaves the radar, and its routines stop.${open ? ` Its ${open} open task(s) will be archived.` : ''} You can reopen it anytime.`, '🎓 Close chapter')) return;
+    a.closed = today();
+    S.routines.forEach(r => { if (r.areaId === id && r.active !== false) { r.active = false; r.closedBy = id; } });
+    S.tasks.forEach(t => { if (t.areaId === id && !t.done) t.archived = id; });
+    if (filterArea === id) filterArea = 'all';
+    save(); settingsForm(); toast(`🎓 ${a.name} chapter closed. Congrats!`);
+  },
+  areopen: id => {
+    applySettings(); const a = area(id); a.closed = null;
+    S.routines.forEach(r => { if (r.closedBy === id) { r.active = true; delete r.closedBy; } });
+    S.tasks.forEach(t => { if (t.archived === id) delete t.archived; });
+    save(); settingsForm(); toast(`${a.name} is back in play`);
+  },
   mstog: id => { openMs.has(id) ? openMs.delete(id) : openMs.add(id); render(); },
   claudenew: () => { claudeAdjust = null; claudeSheet(); },
   claudeadjust: id => { claudeAdjust = id; claudeNote = ''; claudeSheet(); },
@@ -1143,7 +1403,7 @@ const actions = {
   ccopy: () => copyText(claudePrompt($('#cnote').value), 'Copied ✓ Paste it into your Juggle Planner chat'),
   cfinish: () => copyText(S.settings.lang === 'fr' ? "C'est bon pour moi. Donne-moi le plan final maintenant, en UN seul bloc json au format décrit." : 'Looks good. Please give me the final plan now as ONE json code block in the format I described.', 'Copied ✓ Paste it into Claude'),
   cimport: claudeImport, cclose: closeSheet,
-  cundo: () => { if (claudeUndo) { S = JSON.parse(claudeUndo); claudeUndo = null; save(); view = 'goals'; render(); toast('Import undone'); } closeSheet(); },
+  cundo: () => { if (claudeUndo) { S = JSON.parse(claudeUndo); claudeUndo = null; save(); if (view !== 'grow') view = 'goals'; render(); toast('Import undone'); } closeSheet(); },
   gdel: async id => {
     if (!await ask('Delete this goal and its unfinished steps? Finished steps stay in your history.')) return;
     S.tasks = S.tasks.filter(t => !(t.goalId === id && !t.done)); S.tasks.forEach(t => { if (t.goalId === id) { t.goalId = null; t.msId = null; } });
@@ -1233,6 +1493,7 @@ setInterval(() => {
 }, 1000);
 if ('serviceWorker' in navigator && location.protocol !== 'file:') navigator.serviceWorker.register('sw.js').catch(() => { });
 try { navigator.storage && navigator.storage.persist && navigator.storage.persist().catch(() => { }); } catch (e) { }
+initHistory();
 render();
 checkReminders();
 </script>
